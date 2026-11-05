@@ -3,7 +3,7 @@
 **Status 2026-11-05:** steps 1–4 done (`~/install-mesa-aurora.sh`). mesa-aurora 26.3.0-18 installed; it also
 ships `asahi_dri.so`, so the hand-built `asahi`-named kernel keeps GPU acceleration (verified: renderer
 `Apple M1 (G13G B1)`). Asahi COPR mesa repo got `excludepkgs=mesa*`. Instead of step 5, the CI kernel was set
-with `grub2-reboot` (one boot only); the default stays `7.3.0-aurora-j313+` until the CI kernel is verified.
+with `grub2-reboot` (one boot only); 2026-11-06: verified on the CI kernel (AGX renderer, no ZINK errors, both displays, audio, Wi-Fi) and made it the default.
 
 Written 2026-11-05 for the next agent working on asahi-mac (M1 Air J313, Fedora Asahi Remix 44, niri + Noctalia).
 Read `~/.claude/CLAUDE.md` first: use `pkexec`, never `sudo`, and batch root work into as few prompts as possible.
