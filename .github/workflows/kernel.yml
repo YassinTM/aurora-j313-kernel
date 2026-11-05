@@ -1,0 +1,275 @@
+name: kernel
+
+# Daily: follow Aurora's Fedora kernel package, watch the upstream PRs our
+# patches come from, check the patches, and build + release RPMs when any
+# build input changed. Problems become issues; the AI read in them is advice.
+on:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Build even if a release with these exact inputs exists
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - patches/*.patch
+      - config/**
+      - aurora/**
+      - upstream.json
+      - kernel-aurora-j313.spec.in
+      - scripts/build-rpm.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kernel
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GEMINI_MODEL: ${{ vars.GEMINI_MODEL }}
+
+jobs:
+  track:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      issues: write
+    outputs:
+      ref: ${{ steps.commit.outputs.ref }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Follow Aurora's kernel-aurora package
+        id: track
+        if: github.event_name != 'push'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/track.py
+      - name: Report packaging changes
+        if: steps.track.outputs.packaging_changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          body=$RUNNER_TEMP/packaging.md
+          {
+            cat "$RUNNER_TEMP/track.md"
+            echo
+            echo 'Aurora changed its kernel packaging, not just the pinned commit. The build'
+            echo 'carries on with our own spec; check whether it needs the same change.'
+            echo
+            echo '<details><summary>Packaging diff</summary>'
+            echo
+            echo '```diff'
+            head -c 60000 "$RUNNER_TEMP/packaging.diff"
+            echo '```'
+            echo '</details>'
+            echo
+            echo '### AI read'
+            python3 scripts/ai.py prompts/packaging.md "$RUNNER_TEMP/packaging.diff" kernel-aurora-j313.spec.in config/j313.config
+          } >"$body"
+          bash scripts/issue.sh 'Aurora changed its kernel packaging' "$body" "$RUNNER_TEMP/packaging.diff"
+      - name: Watch upstream pull requests
+        if: github.event_name != 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/watch-prs.py
+      - name: Commit what changed
+        id: commit
+        run: |
+          if [[ -n $(git status --porcelain) ]]; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add upstream.json aurora patches/upstream-prs.json
+            if [[ -f $RUNNER_TEMP/commit-msg.txt ]]; then
+              git commit -q -F "$RUNNER_TEMP/commit-msg.txt"
+            else
+              git commit -q -m 'Record upstream pull request state'
+            fi
+            git push -q origin HEAD:main
+          fi
+          echo "ref=$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
+
+  check:
+    needs: track
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+      key: ${{ steps.decide.outputs.key }}
+      tag: ${{ steps.decide.outputs.tag }}
+      j313_release: ${{ steps.decide.outputs.j313_release }}
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.track.outputs.ref }}
+          persist-credentials: false
+      - name: Check the patches
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export PREVIOUS_KERNEL_COMMIT=$(gh release view --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null |
+            sed -n 's/^kernel-commit: \([0-9a-f]\{40\}\)$/\1/p' | head -1)
+          bash scripts/check-patches.sh
+          cat "$RUNNER_TEMP/patch-report.md" >>"$GITHUB_STEP_SUMMARY"
+      - name: Report patches that are upstream now
+        if: steps.check.outputs.skip != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          body=$RUNNER_TEMP/upstream.md
+          {
+            cat "$RUNNER_TEMP/patch-report.md"
+            echo
+            echo "The kernel already contains: \`${{ steps.check.outputs.skip }}\`. The build leaves them out;"
+            echo 'delete them from `patches/` (and from `patches/upstream-prs.json`) to make that permanent.'
+          } >"$body"
+          echo '${{ steps.check.outputs.skip }}' >"$RUNNER_TEMP/upstream.key"
+          bash scripts/issue.sh 'Patches already upstream' "$body" "$RUNNER_TEMP/upstream.key"
+      - name: Report patches that do not apply
+        if: steps.check.outputs.status == 'conflict'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          body=$RUNNER_TEMP/conflict.md
+          {
+            cat "$RUNNER_TEMP/patch-report.md"
+            echo
+            echo 'Nothing was built; the last release stays current. Refresh the patch (or assign'
+            echo 'this issue to Copilot for a pull request) and push it to build.'
+            echo
+            echo '### AI read'
+            python3 scripts/ai.py prompts/conflict.md "$RUNNER_TEMP/patch-context.txt"
+          } >"$body"
+          bash scripts/issue.sh 'A patch no longer applies' "$body" "$RUNNER_TEMP/patch-report.md"
+      - name: Decide whether to build
+        id: decide
+        if: steps.check.outputs.status != 'conflict'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force == true }}
+          SKIP_PATCHES: ${{ steps.check.outputs.skip }}
+        run: bash scripts/decide.sh
+
+  build:
+    needs: [track, check]
+    if: needs.check.outputs.build == 'true'
+    # Public repository: 4 vCPU / 16 GB arm64, free. About 3 hours.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 345
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.track.outputs.ref }}
+          persist-credentials: false
+      - name: Make disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet /usr/local/share/boost
+          df -h .
+      - name: Build RPMs in Fedora 44
+        env:
+          J313_RELEASE: ${{ needs.check.outputs.j313_release }}
+          SKIP_PATCHES: ${{ needs.check.outputs.skip }}
+        run: |
+          set -o pipefail
+          docker run --rm --platform linux/arm64 -e J313_RELEASE -e SKIP_PATCHES -v "$PWD:/src" -w /src \
+            registry.fedoraproject.org/fedora:44 bash scripts/build-rpm.sh 2>&1 | tee build.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rpms
+          path: out/rpms/*.rpm
+          retention-days: 14
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 14
+      - name: Report a failed build
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          tail -c 40000 build.log >"$RUNNER_TEMP/tail.log" 2>/dev/null || echo 'no build log' >"$RUNNER_TEMP/tail.log"
+          body=$RUNNER_TEMP/failed.md
+          {
+            echo "Building \`${{ needs.check.outputs.tag }}\` failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            echo
+            echo '<details><summary>End of the log</summary>'
+            echo
+            echo '```'
+            tail -n 60 "$RUNNER_TEMP/tail.log"
+            echo '```'
+            echo '</details>'
+            echo
+            echo '### AI read'
+            python3 scripts/ai.py prompts/build-failure.md "$RUNNER_TEMP/tail.log" config/j313.config
+          } >"$body"
+          echo '${{ needs.check.outputs.key }}' >"$RUNNER_TEMP/failed.key"
+          bash scripts/issue.sh 'Kernel build failed' "$body" "$RUNNER_TEMP/failed.key"
+
+  release:
+    needs: [track, check, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.track.outputs.ref }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: rpms
+          path: rpms
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check.outputs.tag }}
+          KEY: ${{ needs.check.outputs.key }}
+          SKIP: ${{ needs.check.outputs.skip }}
+        run: |
+          (cd rpms && sha256sum *.rpm >SHA256SUMS && cat SHA256SUMS)
+          pin() { python3 -I -c 'import json,sys; print(json.load(open("upstream.json"))[sys.argv[1]])' "$1"; }
+          notes=$RUNNER_TEMP/notes.md
+          {
+            echo "Aurora kernel-aurora $(pin version)-$(pin aurora_release) for the MacBook Air M1 (J313)."
+            echo 'Install on the Mac with `pkexec aurora-kernel-update`.'
+            echo
+            echo '**Patches:**'
+            for p in patches/*.patch; do
+              n=$(basename "$p")
+              if [[ " $SKIP " == *" $n "* ]]; then echo "- ~~\`$n\`~~ (upstream now)"; else echo "- \`$n\`"; fi
+            done
+            echo
+            echo '**Aurora changelog:**'
+            echo '```'
+            sed -n '/^%changelog/,$p' aurora/kernel-aurora.spec | sed '1d' | awk 'NR>1 && /^\* /{exit} {print}'
+            echo '```'
+            echo
+            echo "kernel-commit: $(pin kernel_commit)"
+            echo "fedora-aurora-commit: $(pin fedora_aurora_commit)"
+            echo "repo-commit: ${{ needs.track.outputs.ref }}"
+            echo "build-key: $KEY"
+          } >"$notes"
+          gh release create "$TAG" rpms/*.rpm rpms/SHA256SUMS --repo "$GITHUB_REPOSITORY" \
+            --target "${{ needs.track.outputs.ref }}" --title "kernel-aurora-j313 $TAG" --notes-file "$notes"

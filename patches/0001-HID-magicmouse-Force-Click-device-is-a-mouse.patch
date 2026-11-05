@@ -1,0 +1,37 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: YassinTM <232429671+YassinTM@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 02:04:36 +0100
+Subject: [PATCH] HID: magicmouse: make the Force Click device a mouse for
+ BTN_RIGHT
+
+Port of 8263151fd onto Aurora's force_input device: libinput ignores a
+device with only BTN_RIGHT, so add BTN_LEFT and REL_X/REL_Y when the deep
+click is mapped to a right click.
+---
+ drivers/hid/hid-magicmouse.c | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/drivers/hid/hid-magicmouse.c b/drivers/hid/hid-magicmouse.c
+index e909a698a..04525241a 100644
+--- a/drivers/hid/hid-magicmouse.c
++++ b/drivers/hid/hid-magicmouse.c
+@@ -2199,6 +2199,16 @@ static void magicmouse_setup_force_input(struct magicmouse_sc *msc)
+ 	input->id.version = hdev->version;
+ 	input->dev.parent = &hdev->dev;
+ 	input_set_capability(input, EV_KEY, haptic_deep_keycode);
++	if (haptic_deep_keycode == BTN_RIGHT) {
++		/*
++		 * libinput ignores a lone BTN_RIGHT and drops a clickpad's own
++		 * right button, so make this look like a mouse to report the
++		 * deep click as a right click.
++		 */
++		input_set_capability(input, EV_KEY, BTN_LEFT);
++		input_set_capability(input, EV_REL, REL_X);
++		input_set_capability(input, EV_REL, REL_Y);
++	}
+ 
+ 	ret = input_register_device(input);
+ 	if (ret) {
+-- 
+2.56.0
+

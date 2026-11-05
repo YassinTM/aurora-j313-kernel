@@ -1,0 +1,79 @@
+# Rendered by scripts/build-rpm.sh; @NAME@ placeholders come from upstream.json.
+# Follows aurora/kernel-aurora.spec (Aurora's own Fedora package) without the
+# aura and aurora-userpages parts, plus patches/ and config/j313.config.
+%global commit @KERNEL_COMMIT@
+%global krel %{version}-%{release}.aarch64
+%global debug_package %{nil}
+%global _build_id_links none
+Name: kernel-aurora-j313
+Version: @VERSION@
+Release: @AURORA_RELEASE@.@J313_RELEASE@%{?dist}.aurora.j313
+Summary: Aurora kernel for the MacBook Air M1 (J313) with local patches
+License: GPL-2.0-only
+URL: https://github.com/YassinTM/aurora-j313-kernel
+Source0: linux-%{commit}.tar.gz
+Source1: config
+Source2: fedora.config
+Source3: validate-config.py
+Source4: j313.config
+@PATCHES@
+ExclusiveArch: aarch64
+BuildRequires: make gcc gcc-c++ clang llvm lld rust rust-src rustfmt cargo bindgen-cli
+BuildRequires: bc bison flex dtc openssl-devel elfutils-libelf-devel dwarves cpio perl python3 patch
+Requires: coreutils kmod dracut grubby update-m1n1
+Provides: kernel-uname-r = %{krel}
+Provides: installonlypkg(kernel)
+
+%description
+aurora-silicon/linux at %{commit}, configured like Aurora's kernel-aurora
+Fedora package, with the patches this MacBook Air M1 still needs. Device
+trees are installed under /boot/dtb-%{krel} like Fedora's own kernel.
+
+%prep
+%autosetup -p1 -n linux-%{commit}
+cp %{SOURCE1} .config
+scripts/kconfig/merge_config.sh -m .config arch/arm64/configs/asahi.config %{SOURCE2} %{SOURCE4}
+scripts/config --set-str LOCALVERSION '' --disable LOCALVERSION_AUTO --set-str SYSTEM_TRUSTED_KEYS '' --set-str SYSTEM_REVOCATION_KEYS ''
+
+%build
+export ARCH=arm64 RUSTC_BOOTSTRAP=1
+export RUST_LIB_SRC=/usr/lib/rustlib/src/rust/library
+python3 tools/aurora-bindgen/build.py --output-dir "$PWD/private-bindgen"
+export BINDGEN="$PWD/private-bindgen/rust-bindgen-0.73.2/target/release/bindgen"
+make LLVM=1 LOCALVERSION=-%{release}.aarch64 BINDGEN="$BINDGEN" olddefconfig
+python3 %{SOURCE3} arch/arm64/configs/asahi.config %{SOURCE2} %{SOURCE4} .config
+make LLVM=1 LOCALVERSION=-%{release}.aarch64 BINDGEN="$BINDGEN" rustavailable
+make LLVM=1 LOCALVERSION=-%{release}.aarch64 BINDGEN="$BINDGEN" %{?_smp_mflags} Image modules dtbs
+[ "$(make -s LLVM=1 LOCALVERSION=-%{release}.aarch64 BINDGEN="$BINDGEN" kernelrelease)" = "%{krel}" ]
+
+%install
+export ARCH=arm64 RUSTC_BOOTSTRAP=1
+make LLVM=1 LOCALVERSION=-%{release}.aarch64 INSTALL_MOD_PATH=%{buildroot}/usr INSTALL_MOD_STRIP=1 modules_install
+install -Dm644 arch/arm64/boot/Image %{buildroot}/usr/lib/modules/%{krel}/vmlinuz
+install -m644 .config %{buildroot}/usr/lib/modules/%{krel}/config
+install -m644 System.map %{buildroot}/usr/lib/modules/%{krel}/System.map
+# update-m1n1 only reads apple/t6*.dtb and apple/t81*.dtb.
+install -d %{buildroot}/usr/lib/modules/%{krel}/dtb/apple %{buildroot}/boot/dtb-%{krel}/apple
+cp arch/arm64/boot/dts/apple/*.dtb %{buildroot}/usr/lib/modules/%{krel}/dtb/apple/
+cp arch/arm64/boot/dts/apple/*.dtb %{buildroot}/boot/dtb-%{krel}/apple/
+test -s %{buildroot}/boot/dtb-%{krel}/apple/t8103-j313.dtb
+rm -f %{buildroot}/usr/lib/modules/%{krel}/build %{buildroot}/usr/lib/modules/%{krel}/source
+
+%posttrans
+if [ -x /usr/bin/kernel-install ]; then
+  /usr/bin/kernel-install add %{krel} /usr/lib/modules/%{krel}/vmlinuz || exit 1
+fi
+
+%preun
+if [ "$1" = 0 ] && [ -x /usr/bin/kernel-install ]; then
+  /usr/bin/kernel-install remove %{krel} || :
+fi
+
+%files
+%license COPYING
+/usr/lib/modules/%{krel}/
+/boot/dtb-%{krel}/
+
+%changelog
+* @DATE@ aurora-j313-kernel CI - @VERSION@-@AURORA_RELEASE@.@J313_RELEASE@
+- See the GitHub release notes.

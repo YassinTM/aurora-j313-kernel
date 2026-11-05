@@ -1,0 +1,28 @@
+#!/bin/bash
+# Keep /boot/dtb (which update-m1n1 bakes into boot.bin for every kernel) on an
+# Aurora device tree, overriding 10-devicetree.install's "last installed kernel
+# wins". Runs before 15-update-m1n1.install.
+#   add of an Aurora kernel  -> pin its device tree (the newest install wins)
+#   add of any other kernel  -> keep the current Aurora pin
+#   remove of the pinned one -> the most recently installed Aurora left
+# Installed to /etc/kernel/install.d by aurora-j313-kernel's tools.
+case "$1" in add|remove) ;; *) exit 0 ;; esac
+shopt -s nullglob
+
+pinned=$(readlink /boot/dtb 2>/dev/null || :)
+if [ "$1" = add ] && [[ $2 == *aurora* ]] && [ -d "/boot/dtb-$2" ]; then
+	pin=dtb-$2
+elif [[ $pinned == dtb-*aurora* ]] && [ -d "/boot/$pinned" ] &&
+	! { [ "$1" = remove ] && [ "$pinned" = "dtb-$2" ]; }; then
+	pin=$pinned
+else
+	# Directory ctime is when it was installed; cp and rpm keep mtimes.
+	pin=$(for d in /boot/dtb-*aurora*; do
+		[ -d "$d" ] || continue
+		[ "$1" = remove ] && [ "$d" = "/boot/dtb-$2" ] && continue
+		echo "$(stat -c %Z "$d") ${d#/boot/}"
+	done | sort -n | tail -1 | cut -d' ' -f2)
+fi
+[ -n "$pin" ] || exit 0
+ln -sfn "$pin" /boot/dtb
+exit 0
