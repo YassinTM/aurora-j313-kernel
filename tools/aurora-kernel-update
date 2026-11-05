@@ -9,7 +9,8 @@ repo=YassinTM/aurora-j313-kernel
 keep=2   # kernel-aurora-j313 versions kept installed (plus the running one)
 here=$(dirname "$(readlink -f "$0")")
 
-json=$(curl -fsSL --retry 3 "https://api.github.com/repos/$repo/releases/latest")
+json=$(curl -fsSL --retry 3 "https://api.github.com/repos/$repo/releases/latest") ||
+	{ echo "No release found at github.com/$repo (none built yet, or GitHub unreachable)" >&2; exit 1; }
 mapfile -t release < <(python3 -I -c '
 import json, sys
 r = json.load(sys.stdin)
