@@ -65,6 +65,14 @@ done < <(printf '%s\n' "${release[@]:1}")
 [[ $(rpm -qp --qf '%{NAME} %{ARCH}' "$dir/$rpm_name") == 'kernel-aurora-j313 aarch64' ]]
 krel=$(rpm -qp --qf '%{VERSION}-%{RELEASE}.%{ARCH}' "$dir/$rpm_name")
 
+# Aurora renamed the GPU driver asahi -> aurora; only mesa-aurora drives it.
+# Fedora Mesa falls back to llvmpipe and niri shows nothing (docs/HANDOFF-mesa-aurora.md).
+if rpm -qlp "$dir/$rpm_name" | grep -qE '/drm/asahi/aurora\.ko' &&
+	! rpm -q mesa-aurora-dri-drivers >/dev/null 2>&1; then
+	echo "$krel needs mesa-aurora (GPU driver is named 'aurora'); install it first, see docs/HANDOFF-mesa-aurora.md" >&2
+	exit 1
+fi
+
 dnf -y install "$dir/$rpm_name"
 test -s "/boot/vmlinuz-$krel" && test -s "/boot/initramfs-$krel.img"
 [[ $(readlink /boot/dtb) == "dtb-$krel" ]] || { echo "/boot/dtb is $(readlink /boot/dtb), expected dtb-$krel" >&2; exit 1; }
