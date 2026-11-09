@@ -4,7 +4,7 @@
     "repo": "aurora-silicon/linux",
     "number": 926,
     "seen_head": "666e108eb60c864352da076101b0747d73b2777b",
-    "seen_state": "open",
+    "seen_state": "closed",
     "why": "Without it BCM4378 Wi-Fi on the MacBook Air M1 does not work. Once it is merged and in Aurora's kernel-aurora package, this repo can be retired in favour of that package (the force-click patch is a nicety)."
   }
 ]

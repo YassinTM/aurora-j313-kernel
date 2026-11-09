@@ -1,7 +1,7 @@
 {
   "version": "7.3.0",
-  "aurora_release": "25",
-  "kernel_commit": "d4d267839caa0aa9cbcd98a792351a52bd856b84",
-  "kernel_sha256": "3fd24d573b597102f749e5ad010c3dbb684d9a695af21bd31c99e8fa7c705feb",
-  "fedora_aurora_commit": "bc917c8ba30fc33de0e9567cef4005a074b23095"
+  "aurora_release": "28",
+  "kernel_commit": "b1c9943b1d648469c05835ba4e74cd83a507ce20",
+  "kernel_sha256": "772dc44e77f008bd87e73e6d506178b617503f8e021f7cf1c89280086d995321",
+  "fedora_aurora_commit": "e94c75654b63dcecd6f0213f85ed57558879c6f4"
 }

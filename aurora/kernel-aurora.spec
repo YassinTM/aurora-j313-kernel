@@ -1,4 +1,4 @@
-%global commit d4d267839caa0aa9cbcd98a792351a52bd856b84
+%global commit b1c9943b1d648469c05835ba4e74cd83a507ce20
 %global krel %{version}-%{release}.aarch64
 %global debug_package %{nil}
 # 1 with a kernel pin whose configuration resolves CONFIG_ARM64_CTXR_EXECMEM=y
@@ -8,7 +8,7 @@
 %global ctxr_execmem 1
 Name: kernel-aurora
 Version: 7.3.0
-Release: 25%{?dist}.aurora
+Release: 28%{?dist}.aurora
 Summary: Aurora kernel for Apple Silicon Macs
 License: GPL-2.0-only
 URL: https://github.com/aurora-silicon/linux
@@ -34,6 +34,9 @@ Macs, including MacBook Neo. Matching DTBs and modules are built together.
 %package core
 Summary: Aurora kernel image and device trees
 Requires: coreutils kmod dracut grubby
+# A kernel-only upgrade must also restore the legacy speaker graphs.
+Requires: aurora-audio >= 4.1-12
+Requires: (aurora-platform-core >= 44-23 if aurora-platform-core)
 Requires: update-m1n1 >= 20261107
 # SN012776 amp settings come from the DT that aura 1.0.0b5 fills in
 # (https://github.com/aurora-silicon/linux/pull/981,
@@ -151,6 +154,28 @@ fi
 %{_docdir}/aurora-userpages/
 
 %changelog
+* Mon Nov 09 2026 Diljit Singh <hey@djdev.me> - 7.3.0-28
+- Pin integration/aurora b1c9943b. Fixes ProMotion internal displays that
+  rendered at 60 Hz while set to 120 Hz on legacy DCP firmware (linux#1307).
+- Drop 0001 and 0002. The driver now serves both speaker protection
+  interfaces and boots every card on "Speaker Volume Unlock", the interface
+  speakersafetyd uses (linux#1279); the MCA PCM bound is linux#1258.
+
+* Mon Nov 09 2026 Ryan Murray <81541646+RyanTheTide@users.noreply.github.com> - 7.3.0-27
+- Fix speaker audio on M1 and M2 Macs: speakersafetyd could not open the
+  speaker sense PCM (snd_pcm_hw_params -ENOMEM), restarted in a loop and
+  never unlocked the speakers, so they stayed silent at the kernel's floor.
+  Bound the MCA PCM buffer at 3 MiB again (linux 79af0bae4d0d had dropped the
+  capture preallocation that used to bound it). Protection is unchanged.
+
+
+* Sun Nov 08 2026 Aurora Silicon <hey@djdev.me> - 7.3.0-26
+- Restore the Asahi Speaker Volume Unlock interface for speakersafetyd and
+  speakerguardd 0.1, retaining the -25 kernel and generation-1 device trees.
+- Restore the matching J700 software-gain contract and legacy audio tests.
+- Require the restored audio profiles for kernel-only updates.
+
+
 * Sun Nov 08 2026 Ryan Murray <81541646+RyanTheTide@users.noreply.github.com> - 7.3.0-25
 - Track aurora-silicon/linux integration/aurora at d4d2678, the fleet32
   kernel tree. The packaged device trees for the M1 Pro, M2, M4 Pro and
